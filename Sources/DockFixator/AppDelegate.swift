@@ -126,7 +126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         config.otherFrames = others
         config.band = settings.guardBand
         config.blockDrags = settings.guardDrags
-        config.edgeBounce = settings.edgeBounce
         EdgeGuard.shared.updateConfiguration(config)
 
         if settings.guardEnabled && Permissions.hasAccessibility {
@@ -159,9 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !manual {
             guard settings.autoRestore, !autoRestoreSuspended else { return }
-            guard Date().timeIntervalSince(lastAutoRestoreAt) > 2.5 else { return }
-            // 用户在拖拽时不要抢光标。
+            // 自动归位会短暂接管光标，所以必须挑用户停手的时候做：
+            // 至少空闲 0.8 秒、距离上次归位超过 8 秒、且没有按着鼠标键。
+            guard Date().timeIntervalSince(lastAutoRestoreAt) > 8 else { return }
+            guard EdgeGuard.shared.secondsSinceRealInput > 0.8 else { return }
             if CGEventSource.buttonState(.combinedSessionState, button: .left) { return }
+            if CGEventSource.buttonState(.combinedSessionState, button: .right) { return }
         }
 
         lastAutoRestoreAt = Date()
@@ -258,7 +260,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // -- 开关
         menu.addItem(checkItem("启用边缘防护", action: #selector(toggleGuard), on: settings.guardEnabled))
         menu.addItem(checkItem("同时拦截拖拽事件", action: #selector(toggleDrags), on: settings.guardDrags))
-        menu.addItem(checkItem("靠边时把光标顶出触发带（更稳）", action: #selector(toggleBounce), on: settings.edgeBounce))
 
         let autoTitle = autoRestoreSuspended ? "Dock 跑走时自动拉回（已暂停）" : "Dock 跑走时自动拉回"
         menu.addItem(checkItem(autoTitle, action: #selector(toggleAutoRestore), on: settings.autoRestore))
@@ -339,10 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleDrags() {
         settings.guardDrags.toggle()
-    }
-
-    @objc private func toggleBounce() {
-        settings.edgeBounce.toggle()
     }
 
     @objc private func toggleAutoRestore() {

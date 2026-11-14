@@ -34,12 +34,25 @@ enum DockRelocator {
         DispatchQueue.global(qos: .userInitiated).async {
             EdgeGuard.shared.setRelocating(true)
 
+            // 无论中途发生什么，都必须还原光标、解除"吞输入"状态。
+            defer {
+                CGWarpMouseCursorPosition(savedCursor)
+                EdgeGuard.shared.setRelocating(false)
+                lock.lock()
+                running = false
+                lock.unlock()
+                DispatchQueue.main.async {
+                    completion?(true)
+                }
+            }
+
             post(to: approach, source: source)
             Thread.sleep(forTimeInterval: 0.03)
 
-            // 分步逼近，模拟真实滑行动作。
+            // 分步逼近，模拟真实滑行动作。用户一动鼠标键就立刻放弃，别跟人抢。
             let steps = 8
             for step in 1...steps {
+                if userIsPressingButton { return }
                 let t = CGFloat(step) / CGFloat(steps)
                 let point = CGPoint(x: approach.x + (target.x - approach.x) * t,
                                     y: approach.y + (target.y - approach.y) * t)
@@ -49,21 +62,16 @@ enum DockRelocator {
 
             // 在边缘点上反复"蹭"几下，确保事件流足够明确。
             for _ in 0..<8 {
+                if userIsPressingButton { return }
                 post(to: target, source: source)
                 Thread.sleep(forTimeInterval: 0.02)
             }
-
-            CGWarpMouseCursorPosition(savedCursor)
-            EdgeGuard.shared.setRelocating(false)
-
-            lock.lock()
-            running = false
-            lock.unlock()
-
-            DispatchQueue.main.async {
-                completion?(true)
-            }
         }
+    }
+
+    private static var userIsPressingButton: Bool {
+        CGEventSource.buttonState(.combinedSessionState, button: .left)
+            || CGEventSource.buttonState(.combinedSessionState, button: .right)
     }
 
     private static func post(to point: CGPoint, source: CGEventSource?) {

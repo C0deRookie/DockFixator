@@ -16,7 +16,6 @@ final class Settings {
         static let guardEnabled = "guardEnabled"
         static let guardBand = "guardBand"
         static let guardDrags = "guardDrags"
-        static let edgeBounce = "edgeBounce"
         static let autoRestore = "autoRestore"
         static let restartDockFallback = "restartDockFallback"
     }
@@ -28,7 +27,6 @@ final class Settings {
             Key.guardEnabled: true,
             Key.guardBand: 8.0,
             Key.guardDrags: false,
-            Key.edgeBounce: true,
             Key.autoRestore: true,
             Key.restartDockFallback: false
         ])
@@ -76,15 +74,6 @@ final class Settings {
         get { defaults.bool(forKey: Key.guardDrags) }
         set {
             defaults.set(newValue, forKey: Key.guardDrags)
-            notifyChange()
-        }
-    }
-
-    /// 是否把真实光标从触发带里"顶"出来。开启后更稳，代价是靠边时指针会轻微回弹。
-    var edgeBounce: Bool {
-        get { defaults.bool(forKey: Key.edgeBounce) }
-        set {
-            defaults.set(newValue, forKey: Key.edgeBounce)
             notifyChange()
         }
     }

@@ -27,14 +27,15 @@ final class EdgeGuard {
         var otherFrames: [CGRect] = []
         var band: CGFloat = 8
         var blockDrags: Bool = false
-        var edgeBounce: Bool = true
     }
 
     private let stateLock = NSLock()
     private var config = Configuration()
     private var relocating = false
+    private var relocatingSince = Date.distantPast
     private var blockedTotal = 0
     private var lastLogAt = Date.distantPast
+    private var lastRealInputAt = Date.distantPast
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -64,7 +65,15 @@ final class EdgeGuard {
     func setRelocating(_ value: Bool) {
         stateLock.lock()
         relocating = value
+        if value { relocatingSince = Date() }
         stateLock.unlock()
+    }
+
+    /// 距离上一次"真人"鼠标移动过了多久。自动归位要靠它避开用户正在操作的时候。
+    var secondsSinceRealInput: TimeInterval {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return Date().timeIntervalSince(lastRealInputAt)
     }
 
     /// 显示器或设置变化时更新拦截参数。
@@ -161,10 +170,22 @@ final class EdgeGuard {
         stateLock.lock()
         let snapshot = config
         let isRelocating = relocating
+        let relocatingFor = Date().timeIntervalSince(relocatingSince)
+        lastRealInputAt = Date()
         stateLock.unlock()
 
         // 迁移 Dock 期间屏蔽真人输入，避免和合成事件互相打架。
-        if isRelocating { return nil }
+        if isRelocating {
+            // 保险丝：迁移流程一旦异常没复位（正常只要 0.4 秒），
+            // 超过 2 秒就强制解除，绝不留下"永久吞掉鼠标移动"的状态。
+            if relocatingFor > 2.0 {
+                stateLock.lock()
+                relocating = false
+                stateLock.unlock()
+            } else {
+                return nil
+            }
+        }
 
         guard snapshot.blockingEnabled else { return Unmanaged.passUnretained(event) }
         if isDrag && !snapshot.blockDrags { return Unmanaged.passUnretained(event) }
@@ -176,7 +197,7 @@ final class EdgeGuard {
             .map { DockGeometry.triggerZone(for: $0, edge: edge, band: snapshot.band) }
             .first { $0.contains(location) }
 
-        guard let hitZone = zone else { return Unmanaged.passUnretained(event) }
+        guard zone != nil else { return Unmanaged.passUnretained(event) }
 
         stateLock.lock()
         blockedTotal += 1
@@ -189,33 +210,12 @@ final class EdgeGuard {
             NSLog("[DockFixator] 拦截边缘触发 @ (%.0f, %.0f)", location.x, location.y)
         }
 
-        // 单纯丢弃事件已能阻止 Dock 换屏；再补一次光标"顶出去"作为保险，
-        // 让真实光标也不会停在触发带里（拖拽时不干预，避免打断拖放）。
-        if snapshot.edgeBounce && !isDrag {
-            bounce(location: location, zone: hitZone, edge: edge)
-        }
-
+        // 只丢弃事件，绝不挪动光标。
+        //
+        // 早期版本在这里额外用 CGWarpMouseCursorPosition 把光标"顶出"触发带，
+        // 结果在双屏接缝处把指针卡死了：指针每次往边缘走都被推回去，物理位移
+        // 和虚拟光标位置的差值越拉越大，必须猛甩一次才能跳出去。
+        // 拦截本身不需要碰光标——事件流丢掉就够了，光标该怎么动还是怎么动。
         return nil
-    }
-
-    private func bounce(location: CGPoint, zone: CGRect, edge: DockEdge) {
-        var pushed = location
-        switch edge {
-        case .bottom:
-            pushed.y = min(location.y, zone.minY - 1)
-        case .left:
-            pushed.x = min(location.x, zone.maxX + 1)
-        case .right:
-            pushed.x = max(location.x, zone.minX - 1)
-        }
-
-        CGWarpMouseCursorPosition(pushed)
-
-        guard let synthetic = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState),
-                                      mouseType: .mouseMoved,
-                                      mouseCursorPosition: pushed,
-                                      mouseButton: .left) else { return }
-        synthetic.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
-        synthetic.post(tap: .cghidEventTap)
     }
 }
